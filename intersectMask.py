@@ -33,29 +33,45 @@ def maskAsArray(sourcePath, maskPath, src_band=1, msk_band=1):
 	driver = src.GetDriver()
 	cols = src.RasterXSize
 	rows = src.RasterYSize
-	transform = src.GetGeoTransform()
-	(upper_left_x, x_size, x_rotation, upper_left_y, y_rotation, y_size) = transform
+	srcTransform = src.GetGeoTransform()
+	(upper_left_x, x_size, x_rotation, upper_left_y, y_rotation, y_size) = srcTransform
 	midInd = (rows/2,cols/2)
 	midx = midInd[1] * x_size + upper_left_x + (x_size / 2) #add half the cell size to center the point
 	midy = midInd[0] * y_size + upper_left_y + (y_size / 2)
 
-	#read source as array
-	srcBand = src.GetRasterBand(src_band)	
-	srcBandArray = srcBand.ReadAsArray()
-
 	#read mask as array to the extent of source
 	msk = gdal.Open(maskPath, GA_ReadOnly)
 	mskTransform = msk.GetGeoTransform()
-	mskBand = msk.GetRasterBand(msk_band)
-	mskBandArray = vf.extract_kernel(msk, midx, midy, cols, rows, 1, mskTransform) 
+	mskBandArray = vf.extract_kernel(msk, midx, midy, cols, rows, msk_band, mskTransform) 
+
+	#if mask is smaller than source, read source array to extent of mask
+	try:
+		extentSwitch = (mskBandArray == [-9999])
+		if extentSwitch:
+			print "\nMask is smaller than source, clipping output to extent of mask..."
+			mskBand = msk.GetRasterBand(msk_band)
+			mskBandArray = mskBand.ReadAsArray()
+			(upper_left_x, x_size, x_rotation, upper_left_y, y_rotation, y_size) = mskTransform
+			cols = msk.RasterXSize
+			rows = msk.RasterYSize
+			midInd = (rows/2,cols/2)
+			midx = midInd[1] * x_size + upper_left_x + (x_size / 2) #add half the cell size to center the point
+			midy = midInd[0] * y_size + upper_left_y + (y_size / 2)
+			srcBandArray = vf.extract_kernel(src, midx, midy, cols, rows, src_band, srcTransform)
+			transform = mskTransform
+	#if mask is bigger than source, read all of source array
+	except:
+		srcBand = src.GetRasterBand(src_band)	
+		srcBandArray = srcBand.ReadAsArray()
+		transform = mskTransform
 
 	#ensure mask is of 0's & 1's, multiply source & mask
 	mskBandArray[np.where(mskBandArray != 0)] = 1
 	outBandArray = srcBandArray * mskBandArray
 
-	return outBandArray, transform, projection
+	return outBandArray, transform, projection, driver
 
-def saveArrayAsRaster(outBandArray, transform, projection, outPath, nodata=None, datatype=GDT_Byte):
+def saveArrayAsRaster(outBandArray, transform, projection, driver, outPath, nodata=None, datatype=GDT_Byte):
 	'''saves a numpy array as a new raster'''
 	print "\nSaving raster..."
 	(rows,cols) = outBandArray.shape
@@ -77,8 +93,8 @@ def saveArrayAsRaster(outBandArray, transform, projection, outPath, nodata=None,
 
 def main(sourcePath, maskPath, outPath, src_band, msk_band, nodata, datatype):
 
-	outBandArray, transform, projection = maskAsArray(sourcePath, maskPath, src_band=src_band, msk_band=msk_band)
-	saveArrayAsRaster(outBandArray, transform, projection, outPath, nodata=nodata, datatype=datatype)
+	outBandArray, transform, projection, driver = maskAsArray(sourcePath, maskPath, src_band=src_band, msk_band=msk_band)
+	saveArrayAsRaster(outBandArray, transform, projection, driver, outPath, nodata=nodata, datatype=datatype)
 
 
 if __name__ == '__main__':
@@ -94,9 +110,7 @@ if __name__ == '__main__':
 		outDir = realPath(os.path.dirname(args['<output>']))
 		try:
 			dt = dataTypes[args['--datatype'].lower()]
-			main(realPath(args['<source>']), realPath(args['<mask>']), args['<output>'], int(args['--src_band']), int(args['--msk_band']), args['--nodata'], dt)
-		except (TypeError, ValueError) as e:
-			sys.exit("\nBand parameter is not an integer.\n Exiting.")
+			main(realPath(args['<source>']), realPath(args['<mask>']), args['<output>'], int(args['--src_band']), int(args['--msk_band']), int(args['--nodata']), dt)
 		except KeyError:
 			sys.exit("\nData type entry not valid. Choices: {0}\n Exiting.".format(','.join([key for (key,value) in dataTypes.items()])))
 
